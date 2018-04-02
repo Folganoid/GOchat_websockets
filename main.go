@@ -11,9 +11,9 @@ import (
 
 var dirPath string
 
-func IndexPage(w http.ResponseWriter, req *http.Request) {
+func IndexPage(w http.ResponseWriter, req *http.Request, filename string) {
 
-	fp, err := os.Open(dirPath + "/index.html")
+	fp, err := os.Open(dirPath + "/" + filename)
 	if err != nil {
 		log.Println("Could not open file", err.Error())
 		w.Write([]byte("500 internal server error"))
@@ -52,7 +52,12 @@ func main() {
 
 	fmt.Println("Starting...")
 
-	http.HandleFunc("/", IndexPage)
+	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		IndexPage(w, req, "index.html")
+	})
+	http.HandleFunc("/index.js", func(w http.ResponseWriter, req *http.Request) {
+		IndexPage(w, req, "index.js")
+	})
 	http.Handle("/ws", websocket.Handler(EchoServer))
 	err := http.ListenAndServe(":8080", nil)
 
