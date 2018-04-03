@@ -9,7 +9,25 @@ import (
 	"os"
 )
 
-var dirPath string
+type (
+	Msg struct {
+		clientKey   string
+		messageText string
+	}
+
+	NewClientEvent struct {
+		clientKey string
+		msgChan   chan Msg
+	}
+)
+
+const MAXBACKLOG = 100
+
+var (
+	dirPath           string
+	clientRequest     = make(chan *NewClientEvent, 100)
+	clientDisconnects = make(chan string)
+)
 
 func IndexPage(w http.ResponseWriter, req *http.Request, filename string) {
 
@@ -31,10 +49,28 @@ func IndexPage(w http.ResponseWriter, req *http.Request, filename string) {
 
 }
 
+func router() {
+	clients := make(map[string]chan Msg)
+
+	for {
+		select {
+		case req := <-clientRequest:
+			clients[req.clientKey] = req.msgChan
+			log.Println("Websocket connected: " + req.clientKey)
+		case clientKey := <-clientDisconnects:
+			delete(clients, clientKey)
+			log.Println("Websocket disconnected: " + clientKey)
+		}
+	}
+}
+
 // Echo the data received on the WebSocket.
 func EchoServer(ws *websocket.Conn) {
-	log.Println("Websocket connected: " + ws.RemoteAddr().String())
-	defer log.Println("Websocket disconnected: " + ws.RemoteAddr().String())
+
+	msgChan := make(chan Msg, 100)
+	clientKey := ws.RemoteAddr().String()
+	clientRequest <- &NewClientEvent{clientKey, msgChan}
+	defer func() { clientDisconnects <- clientKey }()
 
 	_, err := io.Copy(ws, ws)
 	if err != nil {
@@ -51,6 +87,8 @@ func main() {
 	dirPath = os.Args[1]
 
 	fmt.Println("Starting...")
+
+	go router()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		IndexPage(w, req, "index.html")
