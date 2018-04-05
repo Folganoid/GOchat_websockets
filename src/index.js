@@ -1,7 +1,11 @@
 	window.socket = new WebSocket("ws://" + location.host + "/ws");
 	
 function sendMessage(msg) {
-	socket.send(msg)
+
+	var len = "" + msg.length
+	while (len.length < 5) len = += ' '
+
+	socket.send(len + msg)
 }
 
 function handleSubmit() {

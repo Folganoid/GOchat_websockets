@@ -7,7 +7,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
+	//"time"
 )
+
+//const TIMEOUT = time.Minute
 
 type (
 	Msg struct {
@@ -17,7 +22,7 @@ type (
 
 	NewClientEvent struct {
 		clientKey string
-		msgChan   chan Msg
+		msgChan   chan *Msg
 	}
 )
 
@@ -27,6 +32,7 @@ var (
 	dirPath           string
 	clientRequest     = make(chan *NewClientEvent, 100)
 	clientDisconnects = make(chan string)
+	messages          = make(chan *Msg, 100)
 )
 
 func IndexPage(w http.ResponseWriter, req *http.Request, filename string) {
@@ -50,7 +56,7 @@ func IndexPage(w http.ResponseWriter, req *http.Request, filename string) {
 }
 
 func router() {
-	clients := make(map[string]chan Msg)
+	clients := make(map[string]chan *Msg)
 
 	for {
 		select {
@@ -58,29 +64,70 @@ func router() {
 			clients[req.clientKey] = req.msgChan
 			log.Println("Websocket connected: " + req.clientKey)
 		case clientKey := <-clientDisconnects:
+			close(clients[clientKey])
 			delete(clients, clientKey)
 			log.Println("Websocket disconnected: " + clientKey)
+		case msg := <-messages:
+			for _, msgChan := range clients {
+				if len(msgChan) < cap(msgChan) {
+					msgChan <- msg
+				}
+			}
 		}
 	}
 }
 
 // Echo the data received on the WebSocket.
-func EchoServer(ws *websocket.Conn) {
+func ChatServer(ws *websocket.Conn) {
 
-	msgChan := make(chan Msg, 100)
+	lenBuf := make([]byte, 5)
+
+	//ws.SetDeadline(TIMEOUT)
+
+	msgChan := make(chan *Msg, 100)
 	clientKey := ws.RemoteAddr().String()
 	clientRequest <- &NewClientEvent{clientKey, msgChan}
 	defer func() { clientDisconnects <- clientKey }()
 
-	_, err := io.Copy(ws, ws)
-	if err != nil {
-		log.Println("Client error: " + err.Error())
+	go func() {
+		for msg := range msgChan {
+			ws.Write([]byte(msg.text))
+		}
+	}()
+
+	for {
+		_, err := ws.Read(lenBuf)
+		if err != nil {
+			log.Println("Error: ", err.Error())
+			return
+		}
+
+		length, _ := strconv.Atoi(strings.TrimSpace(string(lenBuf)))
+		if length > 65536 {
+			log.Println("Error: too big length: ", length)
+			return
+		}
+
+		if length <= 0 {
+			log.Println("Empty length: ", length)
+			return
+		}
+
+		buf := make([]byte, length)
+		_, err = ws.Read(buf)
+
+		if err != nil {
+			log.Println("Could not read ", length, " bytes: ", err.Error())
+			return
+		}
+
+		messages <- &Msg{clientKey, string(buf)}
 	}
 }
 
 func main() {
 
-	if len(os.Args) < 2 {
+	if len(os.Args) < 3 {
 		log.Fatal("Usage: chatExample <dir>")
 	}
 
@@ -96,7 +143,7 @@ func main() {
 	http.HandleFunc("/index.js", func(w http.ResponseWriter, req *http.Request) {
 		IndexPage(w, req, "index.js")
 	})
-	http.Handle("/ws", websocket.Handler(EchoServer))
+	http.Handle("/ws", websocket.Handler(ChatServer))
 	err := http.ListenAndServe(":8080", nil)
 
 	if err != nil {
